@@ -47,8 +47,8 @@ type source struct {
 	kind pick.Kind
 }
 
-func (s source) Pick(ctx context.Context, m mood.Mood) (pick.Result, error) {
-	return s.c.pick(ctx, s.kind, m)
+func (s source) Pick(ctx context.Context, m mood.Mood, f pick.Filters) (pick.Result, error) {
+	return s.c.pick(ctx, s.kind, m, f)
 }
 
 type result struct {
@@ -67,20 +67,20 @@ type discoverResponse struct {
 	Results    []result `json:"results"`
 }
 
-func (c *Client) pick(ctx context.Context, kind pick.Kind, m mood.Mood) (pick.Result, error) {
-	path, genres := "/discover/movie", m.MovieGenres
+func (c *Client) pick(ctx context.Context, kind pick.Kind, m mood.Mood, f pick.Filters) (pick.Result, error) {
+	path, q := "/discover/movie", query(kind, m, f)
 	if kind == pick.Show {
-		path, genres = "/discover/tv", m.ShowGenres
+		path = "/discover/tv"
 	}
 
-	first, err := c.discover(ctx, path, genres, 1)
+	first, err := c.discover(ctx, path, q, 1)
 	if err != nil {
 		return pick.Result{}, err
 	}
 	items := first.Results
 	if last := min(first.TotalPages, maxPage); last > 1 {
 		if p := rand.IntN(last) + 1; p != 1 {
-			pg, err := c.discover(ctx, path, genres, p)
+			pg, err := c.discover(ctx, path, q, p)
 			if err != nil {
 				return pick.Result{}, err
 			}
@@ -95,13 +95,20 @@ func (c *Client) pick(ctx context.Context, kind pick.Kind, m mood.Mood) (pick.Re
 	return toResult(kind, items[rand.IntN(len(items))]), nil
 }
 
-func (c *Client) discover(ctx context.Context, path string, genres []int, page int) (discoverResponse, error) {
+// query builds the discover parameters (minus page and auth) for a kind,
+// mood, and filters. TMDB's .gte/.lte parameters are inclusive.
+func query(kind pick.Kind, m mood.Mood, f pick.Filters) url.Values {
 	q := url.Values{}
 	q.Set("include_adult", "false")
 	q.Set("sort_by", "popularity.desc")
 	q.Set("vote_count.gte", "200")
-	q.Set("vote_average.gte", "6.5")
-	q.Set("page", strconv.Itoa(page))
+	q.Set("vote_average.gte", strconv.FormatFloat(f.MinRating, 'f', -1, 64))
+
+	genres, runtime, dateParam := m.MovieGenres, f.MovieMinutes, "primary_release_date"
+	if kind == pick.Show {
+		genres, runtime, dateParam = m.ShowGenres, f.ShowEpisodeMinutes, "first_air_date"
+	}
+
 	if len(genres) > 0 {
 		ids := make([]string, len(genres))
 		for i, g := range genres {
@@ -109,6 +116,27 @@ func (c *Client) discover(ctx context.Context, path string, genres []int, page i
 		}
 		q.Set("with_genres", strings.Join(ids, "|")) // | = OR
 	}
+	if runtime.Min > 0 {
+		q.Set("with_runtime.gte", strconv.Itoa(runtime.Min))
+	}
+	if runtime.Max > 0 {
+		q.Set("with_runtime.lte", strconv.Itoa(runtime.Max))
+	}
+	if f.Years.Min > 0 {
+		q.Set(dateParam+".gte", fmt.Sprintf("%04d-01-01", f.Years.Min))
+	}
+	if f.Years.Max > 0 {
+		q.Set(dateParam+".lte", fmt.Sprintf("%04d-12-31", f.Years.Max))
+	}
+	return q
+}
+
+func (c *Client) discover(ctx context.Context, path string, base url.Values, page int) (discoverResponse, error) {
+	q := url.Values{}
+	for k, v := range base {
+		q[k] = v
+	}
+	q.Set("page", strconv.Itoa(page))
 
 	bearer := strings.HasPrefix(c.key, "eyJ")
 	if !bearer {

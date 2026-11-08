@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"net/http"
 	"strconv"
@@ -25,11 +26,18 @@ const (
 	maxPage = 20
 )
 
-const query = `query ($page: Int, $perPage: Int, $genres: [String]) {
+// Null variables are ignored by AniList, so unset filters simply drop out.
+// The *_greater / *_lesser arguments are exclusive.
+const query = `query ($page: Int, $perPage: Int, $genres: [String], $minScore: Int,
+                      $epGreater: Int, $epLesser: Int,
+                      $startGreater: FuzzyDateInt, $startLesser: FuzzyDateInt) {
   Page(page: $page, perPage: $perPage) {
     pageInfo { lastPage }
     media(type: ANIME, isAdult: false, genre_in: $genres, format_in: [TV, MOVIE, ONA],
-          averageScore_greater: 65, sort: POPULARITY_DESC) {
+          averageScore_greater: $minScore,
+          episodes_greater: $epGreater, episodes_lesser: $epLesser,
+          startDate_greater: $startGreater, startDate_lesser: $startLesser,
+          sort: POPULARITY_DESC) {
       id
       title { romaji english }
       description(asHtml: false)
@@ -89,9 +97,11 @@ type response struct {
 	} `json:"errors"`
 }
 
-// Pick returns a random anime matching the mood.
-func (c *Client) Pick(ctx context.Context, m mood.Mood) (pick.Result, error) {
-	first, err := c.fetch(ctx, 1, m.AnimeGenres)
+// Pick returns a random anime matching the mood and filters.
+func (c *Client) Pick(ctx context.Context, m mood.Mood, f pick.Filters) (pick.Result, error) {
+	vars := variables(m, f)
+
+	first, err := c.fetch(ctx, 1, vars)
 	if err != nil {
 		return pick.Result{}, err
 	}
@@ -99,7 +109,7 @@ func (c *Client) Pick(ctx context.Context, m mood.Mood) (pick.Result, error) {
 	items := first.Media
 	if last := min(first.PageInfo.LastPage, maxPage); last > 1 {
 		if p := rand.IntN(last) + 1; p != 1 {
-			pg, err := c.fetch(ctx, p, m.AnimeGenres)
+			pg, err := c.fetch(ctx, p, vars)
 			if err != nil {
 				return pick.Result{}, err
 			}
@@ -114,11 +124,39 @@ func (c *Client) Pick(ctx context.Context, m mood.Mood) (pick.Result, error) {
 	return toResult(items[rand.IntN(len(items))]), nil
 }
 
-func (c *Client) fetch(ctx context.Context, pageNum int, genres []string) (page, error) {
-	vars := map[string]any{"page": pageNum, "perPage": perPage}
-	if len(genres) > 0 {
-		vars["genres"] = genres
+// variables converts a mood and filters into AniList query variables.
+// Filter ranges are inclusive; AniList's comparisons are exclusive.
+func variables(m mood.Mood, f pick.Filters) map[string]any {
+	vars := map[string]any{
+		"perPage": perPage,
+		// averageScore is 0–100; >= 7.5 becomes > 74.
+		"minScore": int(math.Ceil(f.MinRating*10)) - 1,
 	}
+	if len(m.AnimeGenres) > 0 {
+		vars["genres"] = m.AnimeGenres
+	}
+	if f.AnimeEpisodes.Min > 0 {
+		vars["epGreater"] = f.AnimeEpisodes.Min - 1
+	}
+	if f.AnimeEpisodes.Max > 0 {
+		vars["epLesser"] = f.AnimeEpisodes.Max + 1
+	}
+	// FuzzyDateInt is YYYYMMDD; year-only dates are stored as YYYY0000.
+	if f.Years.Min > 0 {
+		vars["startGreater"] = f.Years.Min*10000 - 1
+	}
+	if f.Years.Max > 0 {
+		vars["startLesser"] = (f.Years.Max + 1) * 10000
+	}
+	return vars
+}
+
+func (c *Client) fetch(ctx context.Context, pageNum int, base map[string]any) (page, error) {
+	vars := make(map[string]any, len(base)+1)
+	for k, v := range base {
+		vars[k] = v
+	}
+	vars["page"] = pageNum
 	body, err := json.Marshal(map[string]any{"query": query, "variables": vars})
 	if err != nil {
 		return page{}, err
