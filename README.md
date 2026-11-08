@@ -75,6 +75,9 @@ adventure, Tense. The genre mapping for each lives in [`internal/mood/mood.go`](
 
 Movies and shows only appear in `/pick` once `TMDB_API_KEY` is set.
 
+Movie and Show picks skip anime (Japanese animation), since **Anime** already covers it, and
+other animation is kept. Show picks also skip kids', news, reality, soap, and talk shows.
+
 ## Setup
 
 1. Create an application in the [Discord Developer Portal](https://discord.com/developers/applications).
