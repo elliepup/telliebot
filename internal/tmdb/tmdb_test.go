@@ -44,4 +44,14 @@ func TestQueryShowUsesEpisodeRuntimeAndAirDate(t *testing.T) {
 	if got := q.Get("vote_average.gte"); got != "6.5" {
 		t.Errorf("default rating: got %q, want 6.5", got)
 	}
+	if got := q.Get("without_genres"); got != showGenresExcluded {
+		t.Errorf("without_genres: got %q, want %q", got, showGenresExcluded)
+	}
+}
+
+func TestQueryMovieKeepsAllGenres(t *testing.T) {
+	q := query(pick.Movie, mood.Surprise, pick.ParseFilters("", "", ""))
+	if q.Has("without_genres") {
+		t.Errorf("movies should not exclude genres, got %q", q.Get("without_genres"))
+	}
 }

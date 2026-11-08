@@ -23,6 +23,8 @@ const (
 	siteBase  = "https://www.themoviedb.org"
 	// maxPage limits picks to the top maxPage*20 most popular matches.
 	maxPage = 25
+	// showGenresExcluded: News, Reality, Soap, Talk (TMDB TV genre IDs).
+	showGenresExcluded = "10763,10764,10766,10767"
 )
 
 // Client talks to TMDB.
@@ -121,6 +123,11 @@ func query(kind pick.Kind, m mood.Mood, f pick.Filters) url.Values {
 			ids[i] = strconv.Itoa(g)
 		}
 		q.Set("with_genres", strings.Join(ids, "|")) // | = OR
+	}
+	if kind == pick.Show {
+		// TMDB's TV catalog includes daily news, talk, reality, and soap
+		// programs, which are never what you want from a random pick.
+		q.Set("without_genres", showGenresExcluded)
 	}
 	if runtime.Min > 0 {
 		q.Set("with_runtime.gte", strconv.Itoa(runtime.Min))
