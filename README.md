@@ -34,11 +34,11 @@ Movies and shows only appear in `/pick` once `TMDB_API_KEY` is set.
 
 ## Running
 
-With Docker Compose:
+With Docker Compose (use `docker compose` instead if you have the Compose plugin):
 
 ```sh
-docker compose up -d --build
-docker compose logs -f
+docker-compose up -d --build
+docker-compose logs -f
 ```
 
 With plain Docker:
