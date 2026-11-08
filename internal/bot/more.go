@@ -68,7 +68,11 @@ func (b *Bot) handleMore(i *discordgo.InteractionCreate, key string) {
 			return
 		}
 		slog.Warn("similar failed", "id", key, "err", err)
-		b.ephemeral(i, "Couldn't reach the catalog right now. Try again in a sec.", nil)
+		msg, ok := rateLimitMessage(err)
+		if !ok {
+			msg = catalogErrorMessage
+		}
+		b.ephemeral(i, msg, nil)
 		return
 	}
 	if err := b.store.SaveItem(ctx, res); err != nil {

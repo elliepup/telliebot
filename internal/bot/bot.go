@@ -335,6 +335,9 @@ func (b *Bot) choose(ctx context.Context, scope string, req request, m mood.Mood
 }
 
 func errorMessage(err error, req request) string {
+	if msg, ok := rateLimitMessage(err); ok {
+		return msg
+	}
 	switch {
 	case errors.Is(err, errWatchlistEmpty):
 		if req.Kind != kindAny && req.Kind != "" {
@@ -346,7 +349,22 @@ func errorMessage(err error, req request) string {
 	case errors.Is(err, errUnavailable):
 		return "That type isn't set up yet."
 	}
-	return "Couldn't reach the catalog right now. Try again in a sec."
+	return catalogErrorMessage
+}
+
+const catalogErrorMessage = "Couldn't reach the catalog right now. Try again in a sec."
+
+// rateLimitMessage explains a 429 from a source, with the wait it asked for.
+func rateLimitMessage(err error) (string, bool) {
+	var rl *pick.RateLimitError
+	if !errors.As(err, &rl) {
+		return "", false
+	}
+	wait := "a minute"
+	if secs := int(rl.RetryAfter.Round(time.Second) / time.Second); secs > 0 {
+		wait = fmt.Sprintf("~%ds", secs)
+	}
+	return fmt.Sprintf("⏳ %s is rate-limiting us right now. Try again in %s.", rl.Source, wait), true
 }
 
 func (b *Bot) pick(ctx context.Context, kind string, m mood.Mood, f pick.Filters) (pick.Result, error) {
