@@ -64,6 +64,13 @@ type Source interface {
 	Pick(ctx context.Context, m mood.Mood, f Filters) (Result, error)
 }
 
+// Recommender is a Source that can also pick a random title similar to one
+// of its own, given that title's Result ID. Only f.MinRating and f.Exclude
+// apply; recommendation lists are too short for the other filters.
+type Recommender interface {
+	Similar(ctx context.Context, id string, f Filters) (Result, error)
+}
+
 var (
 	tagRE        = regexp.MustCompile(`<[^>]*>`)
 	blankLinesRE = regexp.MustCompile(`\n{3,}`)

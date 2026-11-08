@@ -1,6 +1,7 @@
 package anilist
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/elliepup/telliebot/internal/mood"
@@ -51,5 +52,47 @@ func TestVariablesOmitsUnsetFilters(t *testing.T) {
 	}
 	if v["minScore"] != 64 { // default 6.5 → > 64
 		t.Errorf("minScore: got %v, want 64", v["minScore"])
+	}
+}
+
+func TestKeepSimilar(t *testing.T) {
+	f := pick.Filters{MinRating: 7.5, Exclude: map[string]bool{"anilist:2": true}}
+	ok := media{ID: 1, Format: "TV", AverageScore: 75}
+	cases := []struct {
+		name string
+		m    func(media) media
+		want bool
+	}{
+		{"passes at the exact minimum", func(m media) media { return m }, true},
+		{"below rating", func(m media) media { m.AverageScore = 74; return m }, false},
+		{"unscored", func(m media) media { m.AverageScore = 0; return m }, false},
+		{"excluded", func(m media) media { m.ID = 2; return m }, false},
+		{"adult", func(m media) media { m.IsAdult = true; return m }, false},
+		{"OVA", func(m media) media { m.Format = "OVA"; return m }, false},
+		{"movie", func(m media) media { m.Format = "MOVIE"; return m }, true},
+	}
+	for _, c := range cases {
+		if got := keepSimilar(c.m(ok), f); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestParseItemID(t *testing.T) {
+	if n, ok := parseItemID("anilist:21"); !ok || n != 21 {
+		t.Errorf("got %d %v", n, ok)
+	}
+	for _, bad := range []string{"tmdb:movie:21", "anilist:", "anilist:x", "anilist:-3"} {
+		if _, ok := parseItemID(bad); ok {
+			t.Errorf("%q should not parse", bad)
+		}
+	}
+}
+
+func TestRecsQueryUsesSharedFields(t *testing.T) {
+	for _, q := range []string{query, recsQuery} {
+		if !strings.Contains(q, "trailer { id site }") || !strings.Contains(q, "isAdult") {
+			t.Errorf("query is missing shared media fields:\n%s", q)
+		}
 	}
 }
