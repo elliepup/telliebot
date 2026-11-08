@@ -30,6 +30,25 @@ settings.
 
 Shows filter by episode runtime because TMDB can't filter by number of seasons.
 
+### Buttons
+
+Every pick has these buttons:
+
+| Button      | What it does                                                                 |
+|-------------|------------------------------------------------------------------------------|
+| 🔄 Reroll   | Pick again with the same settings                                            |
+| 👁️ Seen it  | Never suggest this title again in this server, then pick a new one. The person who clicked gets a private **Undo** |
+| ⭐ Save     | Add it to the server's shared watchlist                                      |
+| ▶️ Trailer  | Open the trailer (when one is known)                                         |
+
+### Watchlist
+
+The seen list and watchlist are **shared by everyone in a server**. In DMs, they're personal.
+
+- `/watchlist [type]` shows the 25 newest saved titles, with a dropdown to remove them
+- `/pick from:watchlist [type]` picks a random title from the watchlist (mood and filters are ignored)
+- Marking a saved title as seen also removes it from the watchlist
+
 Moods: Surprise me, Cozy, Funny, Hype, Emotional, Romantic, Spooky, Mind-bending, Epic
 adventure, Tense. The genre mapping for each lives in [`internal/mood/mood.go`](internal/mood/mood.go).
 
@@ -63,8 +82,18 @@ With plain Docker:
 
 ```sh
 docker build -t telliebot .
-docker run -d --name telliebot --env-file .env --restart unless-stopped telliebot
+docker run -d --name telliebot --env-file .env --restart unless-stopped \
+  -v telliebot-data:/data telliebot
 ```
+
+The database lives in the `telliebot-data` volume, so it survives rebuilds. To back it up:
+
+```sh
+docker run --rm -v telliebot_telliebot-data:/data -v "$PWD":/backup alpine \
+  cp /data/telliebot.db /backup/telliebot-backup.db
+```
+
+(Compose prefixes the volume name with the project name. Check it with `docker volume ls`.)
 
 Locally:
 
