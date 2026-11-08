@@ -256,20 +256,37 @@ func (s *Store) Watchlist(ctx context.Context, scope string, kind pick.Kind, lim
 // RandomFromWatchlist picks a random saved title in a scope, optionally
 // filtered by kind ("" for all). ok is false when nothing matches.
 func (s *Store) RandomFromWatchlist(ctx context.Context, scope string, kind pick.Kind) (r pick.Result, ok bool, err error) {
-	var data string
-	err = s.db.QueryRowContext(ctx, `
+	rs, err := s.RandomFromWatchlistN(ctx, scope, kind, 1)
+	if err != nil || len(rs) == 0 {
+		return pick.Result{}, false, err
+	}
+	return rs[0], true, nil
+}
+
+// RandomFromWatchlistN picks up to n distinct random saved titles in a
+// scope, optionally filtered by kind ("" for all).
+func (s *Store) RandomFromWatchlistN(ctx context.Context, scope string, kind pick.Kind, n int) ([]pick.Result, error) {
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT i.data FROM watchlist w JOIN items i ON i.key = w.key
 		WHERE w.scope = ? AND (? = '' OR i.kind = ?)
-		ORDER BY random() LIMIT 1`,
-		scope, string(kind), string(kind)).Scan(&data)
-	if errors.Is(err, sql.ErrNoRows) {
-		return pick.Result{}, false, nil
-	}
+		ORDER BY random() LIMIT ?`,
+		scope, string(kind), string(kind), n)
 	if err != nil {
-		return pick.Result{}, false, err
+		return nil, err
 	}
-	if err := json.Unmarshal([]byte(data), &r); err != nil {
-		return pick.Result{}, false, err
+	defer rows.Close()
+
+	var out []pick.Result
+	for rows.Next() {
+		var data string
+		if err := rows.Scan(&data); err != nil {
+			return nil, err
+		}
+		var r pick.Result
+		if err := json.Unmarshal([]byte(data), &r); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
 	}
-	return r, true, nil
+	return out, rows.Err()
 }

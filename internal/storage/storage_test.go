@@ -184,3 +184,18 @@ func TestRandomFromWatchlist(t *testing.T) {
 		t.Fatal("no shows saved, but got one")
 	}
 }
+
+func TestRandomFromWatchlistN(t *testing.T) {
+	s := newStore(t)
+	mustSave(t, s, frieren, matrix)
+	s.AddToWatchlist(ctx, scope, frieren.ID, "u1")
+	s.AddToWatchlist(ctx, scope, matrix.ID, "u1")
+
+	rs, err := s.RandomFromWatchlistN(ctx, scope, "", 5)
+	if err != nil || len(rs) != 2 || rs[0].ID == rs[1].ID {
+		t.Fatalf("want 2 distinct, got %+v err=%v", rs, err)
+	}
+	if rs, _ := s.RandomFromWatchlistN(ctx, other, "", 5); len(rs) != 0 {
+		t.Fatalf("other scope should be empty, got %d", len(rs))
+	}
+}

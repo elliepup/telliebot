@@ -36,6 +36,10 @@ func (b *Bot) onComponent(i *discordgo.InteractionCreate) {
 		b.handleUnseen(i, strings.TrimPrefix(id, unseenPrefix))
 	case strings.HasPrefix(id, wlRemoveID):
 		b.handleWatchlistRemove(i, strings.TrimPrefix(id, wlRemoveID), i.MessageComponentData().Values)
+	case strings.HasPrefix(id, votePrefix):
+		b.handleBallot(i, strings.TrimPrefix(id, votePrefix))
+	case strings.HasPrefix(id, voteEndPrefix):
+		b.handleVoteEnd(i, strings.TrimPrefix(id, voteEndPrefix))
 	}
 }
 
@@ -89,6 +93,23 @@ func savedButton(id string) discordgo.Button {
 		CustomID: savePrefix + id,
 		Emoji:    &discordgo.ComponentEmoji{Name: "⭐"},
 		Disabled: true,
+	}
+}
+
+// markSaved returns a mapButtons func that flips the Save button for key to
+// a disabled Saved, keeping any suffix (vote results label them "Save 2️⃣").
+func markSaved(key string) func(discordgo.Button) discordgo.Button {
+	return func(btn discordgo.Button) discordgo.Button {
+		if btn.CustomID != savePrefix+key {
+			return btn
+		}
+		btn.Label = strings.Replace(btn.Label, "Save", "Saved", 1)
+		btn.Style = discordgo.SuccessButton
+		btn.Disabled = true
+		if btn.Emoji == nil {
+			btn.Emoji = &discordgo.ComponentEmoji{Name: "⭐"}
+		}
+		return btn
 	}
 }
 
@@ -231,12 +252,7 @@ func (b *Bot) handleSave(i *discordgo.InteractionCreate, key string) {
 		return
 	}
 
-	comps := mapButtons(i.Message.Components, func(btn discordgo.Button) discordgo.Button {
-		if btn.CustomID == savePrefix+key {
-			return savedButton(key)
-		}
-		return btn
-	})
+	comps := mapButtons(i.Message.Components, markSaved(key))
 	if _, err := b.s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Components: &comps}); err != nil {
 		slog.Error("mark saved", "err", err)
 	}

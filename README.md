@@ -41,6 +41,21 @@ Every pick has these buttons:
 | ⭐ Save     | Add it to the server's shared watchlist                                      |
 | ▶️ Trailer  | Open the trailer (when one is known)                                         |
 
+### Voting
+
+Can't decide? `/vote` posts a few random picks and lets everyone vote:
+
+```
+/vote count:<2-5> timer:<timer> [same options as /pick]
+```
+
+- `count` defaults to 3. `timer` can be 30 seconds, 1, 2 (default), 5, or 10 minutes, or **No timer** (someone clicks 🏁 **End vote**). Timed votes show a live countdown
+- One vote each. Click another option to switch, or the same one again to take your vote back
+- The winner gets the full card with 👁️ Seen it, ⭐ Save, and ▶️ Trailer. Ties are broken at random. If nobody votes, the bot picks at random
+- Runners-up get their own ⭐ Save buttons, for another night
+- `from:watchlist` votes between titles you've already saved
+- Votes live in memory, so restarting the bot ends any open vote
+
 ### Watchlist
 
 The seen list and watchlist are **shared by everyone in a server**. In DMs, they're personal.
