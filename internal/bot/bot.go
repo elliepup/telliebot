@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -70,6 +71,9 @@ type Bot struct {
 	sources map[pick.Kind]pick.Source
 	kinds   []pick.Kind // configured kinds, sorted, for stable choices
 	store   *storage.Store
+
+	votesMu sync.Mutex
+	votes   map[string]*vote // open votes by ID
 }
 
 // New creates a bot. Call Open to connect.
@@ -86,7 +90,7 @@ func New(token, guildID string, sources map[pick.Kind]pick.Source, store *storag
 	}
 	s.Identify.Intents = discordgo.IntentsGuilds
 
-	b := &Bot{s: s, guildID: guildID, sources: sources, store: store}
+	b := &Bot{s: s, guildID: guildID, sources: sources, store: store, votes: map[string]*vote{}}
 	for k := range sources {
 		b.kinds = append(b.kinds, k)
 	}
@@ -144,21 +148,27 @@ func (b *Bot) commands() []*discordgo.ApplicationCommand {
 	}
 
 	str := discordgo.ApplicationCommandOptionString
+	pickOpts := []*discordgo.ApplicationCommandOption{
+		{Type: str, Name: "mood", Description: "How are you feeling?", Choices: moodChoices},
+		{Type: str, Name: "type", Description: "What kind of thing to watch", Choices: typeChoices},
+		{Type: str, Name: "min_rating", Description: fmt.Sprintf("Minimum rating out of 10 (default %.1f)", pick.DefaultMinRating), Choices: toOptionChoices(pick.RatingChoices)},
+		{Type: str, Name: "length", Description: "How much time you've got", Choices: toOptionChoices(pick.LengthChoices)},
+		{Type: str, Name: "era", Description: "When it came out", Choices: toOptionChoices(pick.EraChoices)},
+		{Type: str, Name: "from", Description: "Where to pick from", Choices: []*discordgo.ApplicationCommandOptionChoice{
+			{Name: "🌐 Everything (default)", Value: "everything"},
+			{Name: "⭐ Our watchlist (ignores mood and filters)", Value: fromWatchlist},
+		}},
+	}
 	return []*discordgo.ApplicationCommand{
 		{
 			Name:        "pick",
 			Description: "Pick something random to watch",
-			Options: []*discordgo.ApplicationCommandOption{
-				{Type: str, Name: "mood", Description: "How are you feeling?", Choices: moodChoices},
-				{Type: str, Name: "type", Description: "What kind of thing to watch", Choices: typeChoices},
-				{Type: str, Name: "min_rating", Description: fmt.Sprintf("Minimum rating out of 10 (default %.1f)", pick.DefaultMinRating), Choices: toOptionChoices(pick.RatingChoices)},
-				{Type: str, Name: "length", Description: "How much time you've got", Choices: toOptionChoices(pick.LengthChoices)},
-				{Type: str, Name: "era", Description: "When it came out", Choices: toOptionChoices(pick.EraChoices)},
-				{Type: str, Name: "from", Description: "Where to pick from", Choices: []*discordgo.ApplicationCommandOptionChoice{
-					{Name: "🌐 Everything (default)", Value: "everything"},
-					{Name: "⭐ Our watchlist (ignores mood and filters)", Value: fromWatchlist},
-				}},
-			},
+			Options:     pickOpts,
+		},
+		{
+			Name:        "vote",
+			Description: "Vote between a few random picks",
+			Options:     b.voteOptions(pickOpts),
 		},
 		{
 			Name:        "watchlist",
@@ -176,26 +186,18 @@ func (b *Bot) onInteraction(_ *discordgo.Session, i *discordgo.InteractionCreate
 		data := i.ApplicationCommandData()
 		switch data.Name {
 		case "pick":
-			req := request{Mood: mood.Surprise.Key, Kind: kindAny}
+			b.respond(i, discordgo.InteractionResponseDeferredChannelMessageWithSource, parseRequest(data.Options))
+		case "vote":
+			count, timer := defaultVoteOptions, ""
 			for _, o := range data.Options {
 				switch o.Name {
-				case "mood":
-					req.Mood = o.StringValue()
-				case "type":
-					req.Kind = o.StringValue()
-				case "min_rating":
-					req.Rating = o.StringValue()
-				case "length":
-					req.Length = o.StringValue()
-				case "era":
-					req.Era = o.StringValue()
-				case "from":
-					if o.StringValue() == fromWatchlist {
-						req.From = fromWatchlist
-					}
+				case "count":
+					count = min(max(int(o.IntValue()), minVoteOptions), maxVoteOptions)
+				case "timer":
+					timer = o.StringValue()
 				}
 			}
-			b.respond(i, discordgo.InteractionResponseDeferredChannelMessageWithSource, req)
+			b.handleVoteCommand(i, parseRequest(data.Options), count, timer)
 		case "watchlist":
 			kind := ""
 			for _, o := range data.Options {
@@ -209,6 +211,31 @@ func (b *Bot) onInteraction(_ *discordgo.Session, i *discordgo.InteractionCreate
 	case discordgo.InteractionMessageComponent:
 		b.onComponent(i)
 	}
+}
+
+// parseRequest reads the options shared by /pick and /vote. Unknown option
+// names (like /vote's count and timer) are ignored.
+func parseRequest(opts []*discordgo.ApplicationCommandInteractionDataOption) request {
+	req := request{Mood: mood.Surprise.Key, Kind: kindAny}
+	for _, o := range opts {
+		switch o.Name {
+		case "mood":
+			req.Mood = o.StringValue()
+		case "type":
+			req.Kind = o.StringValue()
+		case "min_rating":
+			req.Rating = o.StringValue()
+		case "length":
+			req.Length = o.StringValue()
+		case "era":
+			req.Era = o.StringValue()
+		case "from":
+			if o.StringValue() == fromWatchlist {
+				req.From = fromWatchlist
+			}
+		}
+	}
+	return req
 }
 
 // ack acknowledges an interaction right away; Discord allows only 3 seconds.
