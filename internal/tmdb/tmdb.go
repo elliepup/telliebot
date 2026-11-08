@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -50,6 +49,15 @@ type source struct {
 	kind pick.Kind
 }
 
+// itemID is the stable Result ID for a TMDB title. Movie and TV IDs are
+// separate namespaces in TMDB, so the segment is part of the key.
+func itemID(kind pick.Kind, id int) string {
+	if kind == pick.Show {
+		return "tmdb:tv:" + strconv.Itoa(id)
+	}
+	return "tmdb:movie:" + strconv.Itoa(id)
+}
+
 func (s source) Pick(ctx context.Context, m mood.Mood, f pick.Filters) (pick.Result, error) {
 	return s.c.pick(ctx, s.kind, m, f)
 }
@@ -82,22 +90,18 @@ func (c *Client) pick(ctx context.Context, kind pick.Kind, m mood.Mood, f pick.F
 	if err != nil {
 		return pick.Result{}, err
 	}
-	items := first.Results
-	if last := min(first.TotalPages, maxPage); last > 1 {
-		if p := rand.IntN(last) + 1; p != 1 {
-			pg, err := c.discover(ctx, path, q, p)
-			if err != nil {
-				return pick.Result{}, err
-			}
-			if len(pg.Results) > 0 {
-				items = pg.Results
-			}
-		}
+	fetch := func(ctx context.Context, p int) ([]result, error) {
+		pg, err := c.discover(ctx, path, q, p)
+		return pg.Results, err
 	}
-	if len(items) == 0 {
-		return pick.Result{}, pick.ErrNoResults
+	// TMDB has no "exclude these IDs" parameter, so seen titles are skipped
+	// locally; RandomFromPages tries other pages if a page is all seen.
+	keep := func(r result) bool { return !f.Exclude[itemID(kind, r.ID)] }
+
+	chosen, err := pick.RandomFromPages(ctx, min(first.TotalPages, maxPage), first.Results, fetch, keep)
+	if err != nil {
+		return pick.Result{}, err
 	}
-	chosen := items[rand.IntN(len(items))]
 	res := toResult(kind, chosen)
 	res.TrailerURL = c.trailer(ctx, kind, chosen)
 	return res, nil
@@ -282,6 +286,7 @@ func toResult(kind pick.Kind, r result) pick.Result {
 	}
 
 	res := pick.Result{
+		ID:          itemID(kind, r.ID),
 		Kind:        kind,
 		Title:       title,
 		URL:         fmt.Sprintf("%s/%s/%d", siteBase, segment, r.ID),

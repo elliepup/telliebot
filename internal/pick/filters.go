@@ -23,6 +23,9 @@ type Filters struct {
 	ShowEpisodeMinutes Range // TV episode runtime (TMDB can't filter by season count)
 
 	Years Range // release / first-air year
+
+	// Exclude holds Result IDs to skip, e.g. titles marked as seen.
+	Exclude map[string]bool
 }
 
 // Choice is a selectable filter value shown in Discord.
