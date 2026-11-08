@@ -1,6 +1,7 @@
 package tmdb
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/elliepup/telliebot/internal/mood"
@@ -53,5 +54,31 @@ func TestQueryMovieKeepsAllGenres(t *testing.T) {
 	q := query(pick.Movie, mood.Surprise, pick.ParseFilters("", "", ""))
 	if q.Has("without_genres") {
 		t.Errorf("movies should not exclude genres, got %q", q.Get("without_genres"))
+	}
+}
+
+func TestQueryShowExcludesKids(t *testing.T) {
+	q := query(pick.Show, mood.Surprise, pick.ParseFilters("", "", ""))
+	if !strings.Contains(q.Get("without_genres"), "10762") {
+		t.Errorf("shows should exclude Kids (10762), got %q", q.Get("without_genres"))
+	}
+}
+
+func TestIsAnime(t *testing.T) {
+	cases := []struct {
+		name string
+		r    result
+		want bool
+	}{
+		{"japanese animation", result{OriginalLanguage: "ja", GenreIDs: []int{16, 10759}}, true},
+		{"japanese live action", result{OriginalLanguage: "ja", GenreIDs: []int{18}}, false},
+		{"western animation", result{OriginalLanguage: "en", GenreIDs: []int{16, 35}}, false},
+		{"chinese animation", result{OriginalLanguage: "zh", GenreIDs: []int{16}}, false},
+		{"no genres", result{OriginalLanguage: "ja"}, false},
+	}
+	for _, c := range cases {
+		if got := isAnime(c.r); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
 	}
 }

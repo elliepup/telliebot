@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -22,8 +23,10 @@ const (
 	siteBase  = "https://www.themoviedb.org"
 	// maxPage limits picks to the top maxPage*20 most popular matches.
 	maxPage = 25
-	// showGenresExcluded: News, Reality, Soap, Talk (TMDB TV genre IDs).
-	showGenresExcluded = "10763,10764,10766,10767"
+	// showGenresExcluded: Kids, News, Reality, Soap, Talk (TMDB TV genre IDs).
+	showGenresExcluded = "10762,10763,10764,10766,10767"
+	// animationGenre is Animation in both TMDB's movie and TV genre lists.
+	animationGenre = 16
 )
 
 // Client talks to TMDB.
@@ -73,6 +76,14 @@ type result struct {
 	FirstAirDate string  `json:"first_air_date"` // shows
 
 	OriginalLanguage string `json:"original_language"`
+	GenreIDs         []int  `json:"genre_ids"`
+}
+
+// isAnime reports whether a TMDB title is anime: Japanese-language
+// animation. The Anime type already covers these through AniList, so they're
+// skipped here. Other animation (Arcane, BoJack, Pixar) is kept.
+func isAnime(r result) bool {
+	return r.OriginalLanguage == "ja" && slices.Contains(r.GenreIDs, animationGenre)
 }
 
 type discoverResponse struct {
@@ -94,9 +105,10 @@ func (c *Client) pick(ctx context.Context, kind pick.Kind, m mood.Mood, f pick.F
 		pg, err := c.discover(ctx, path, q, p)
 		return pg.Results, err
 	}
-	// TMDB has no "exclude these IDs" parameter, so seen titles are skipped
-	// locally; RandomFromPages tries other pages if a page is all seen.
-	keep := func(r result) bool { return !f.Exclude[itemID(kind, r.ID)] }
+	// TMDB can't exclude IDs or combine "Animation and Japanese" in one
+	// without_* parameter, so seen titles and anime are skipped locally.
+	// RandomFromPages tries other pages if a page has nothing left.
+	keep := func(r result) bool { return !f.Exclude[itemID(kind, r.ID)] && !isAnime(r) }
 
 	chosen, err := pick.RandomFromPages(ctx, min(first.TotalPages, maxPage), first.Results, fetch, keep)
 	if err != nil {
