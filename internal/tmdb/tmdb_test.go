@@ -82,3 +82,45 @@ func TestIsAnime(t *testing.T) {
 		}
 	}
 }
+
+func TestParseItemIDByKind(t *testing.T) {
+	if n, ok := parseItemID(pick.Movie, "tmdb:movie:603"); !ok || n != 603 {
+		t.Errorf("movie: got %d %v", n, ok)
+	}
+	if n, ok := parseItemID(pick.Show, "tmdb:tv:1399"); !ok || n != 1399 {
+		t.Errorf("show: got %d %v", n, ok)
+	}
+	if _, ok := parseItemID(pick.Movie, "tmdb:tv:1399"); ok {
+		t.Error("a TV ID must not parse as a movie")
+	}
+	if _, ok := parseItemID(pick.Show, "anilist:1"); ok {
+		t.Error("an AniList ID must not parse as TMDB")
+	}
+}
+
+func TestKeepSimilar(t *testing.T) {
+	f := pick.Filters{MinRating: 7, Exclude: map[string]bool{"tmdb:tv:2": true}}
+	ok := result{ID: 1, VoteAverage: 7, VoteCount: minRecVotes, OriginalLanguage: "en", GenreIDs: []int{18}}
+	cases := []struct {
+		name string
+		kind pick.Kind
+		r    func(result) result
+		want bool
+	}{
+		{"passes at the minimums", pick.Show, func(r result) result { return r }, true},
+		{"below rating", pick.Show, func(r result) result { r.VoteAverage = 6.9; return r }, false},
+		{"too few votes", pick.Show, func(r result) result { r.VoteCount = minRecVotes - 1; return r }, false},
+		{"seen", pick.Show, func(r result) result { r.ID = 2; return r }, false},
+		{"seen ID is per kind", pick.Movie, func(r result) result { r.ID = 2; return r }, true},
+		{"adult", pick.Movie, func(r result) result { r.Adult = true; return r }, false},
+		{"anime", pick.Movie, func(r result) result { r.OriginalLanguage, r.GenreIDs = "ja", []int{16}; return r }, false},
+		{"kids show", pick.Show, func(r result) result { r.GenreIDs = []int{16, 10762}; return r }, false},
+		{"talk show", pick.Show, func(r result) result { r.GenreIDs = []int{10767}; return r }, false},
+		{"kids genre ID on a movie means nothing", pick.Movie, func(r result) result { r.GenreIDs = []int{10762}; return r }, true},
+	}
+	for _, c := range cases {
+		if got := keepSimilar(c.kind, c.r(ok), f); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}

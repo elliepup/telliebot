@@ -61,8 +61,31 @@ func itemID(kind pick.Kind, id int) string {
 	return "tmdb:movie:" + strconv.Itoa(id)
 }
 
+// parseItemID extracts the numeric TMDB ID from a Result ID of this kind.
+func parseItemID(kind pick.Kind, key string) (int, bool) {
+	prefix := strings.TrimSuffix(itemID(kind, 0), "0")
+	s, ok := strings.CutPrefix(key, prefix)
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.Atoi(s)
+	return n, err == nil && n > 0
+}
+
+// segment is the URL path segment TMDB uses for a kind.
+func segment(kind pick.Kind) string {
+	if kind == pick.Show {
+		return "tv"
+	}
+	return "movie"
+}
+
 func (s source) Pick(ctx context.Context, m mood.Mood, f pick.Filters) (pick.Result, error) {
 	return s.c.pick(ctx, s.kind, m, f)
+}
+
+func (s source) Similar(ctx context.Context, id string, f pick.Filters) (pick.Result, error) {
+	return s.c.similar(ctx, s.kind, id, f)
 }
 
 type result struct {
@@ -77,6 +100,8 @@ type result struct {
 
 	OriginalLanguage string `json:"original_language"`
 	GenreIDs         []int  `json:"genre_ids"`
+	VoteCount        int    `json:"vote_count"`
+	Adult            bool   `json:"adult"`
 }
 
 // isAnime reports whether a TMDB title is anime: Japanese-language
@@ -117,6 +142,62 @@ func (c *Client) pick(ctx context.Context, kind pick.Kind, m mood.Mood, f pick.F
 	res := toResult(kind, chosen)
 	res.TrailerURL = c.trailer(ctx, kind, chosen)
 	return res, nil
+}
+
+const (
+	// recPages caps how many pages of recommendations to choose from. TMDB
+	// orders them by relevance, so later pages drift away from the title.
+	recPages = 2
+	// minRecVotes keeps a handful of votes from passing the rating filter.
+	// Discover uses 200; recommendations are fewer, so this is lower.
+	minRecVotes = 50
+)
+
+// similar picks a random recommendation for key (a Result ID of kind).
+func (c *Client) similar(ctx context.Context, kind pick.Kind, key string, f pick.Filters) (pick.Result, error) {
+	n, ok := parseItemID(kind, key)
+	if !ok {
+		return pick.Result{}, fmt.Errorf("tmdb: not a %s ID: %q", kind, key)
+	}
+	path := fmt.Sprintf("/%s/%d/recommendations", segment(kind), n)
+
+	first, err := c.discover(ctx, path, url.Values{}, 1)
+	if err != nil {
+		return pick.Result{}, err
+	}
+	fetch := func(ctx context.Context, p int) ([]result, error) {
+		pg, err := c.discover(ctx, path, url.Values{}, p)
+		return pg.Results, err
+	}
+	keep := func(r result) bool { return keepSimilar(kind, r, f) }
+
+	chosen, err := pick.RandomFromPages(ctx, min(first.TotalPages, recPages), first.Results, fetch, keep)
+	if err != nil {
+		return pick.Result{}, err
+	}
+	res := toResult(kind, chosen)
+	res.TrailerURL = c.trailer(ctx, kind, chosen)
+	return res, nil
+}
+
+// keepSimilar applies the same rules as discover picks to a recommendation,
+// which TMDB returns unfiltered.
+func keepSimilar(kind pick.Kind, r result, f pick.Filters) bool {
+	if r.Adult || isAnime(r) || f.Exclude[itemID(kind, r.ID)] {
+		return false
+	}
+	if r.VoteCount < minRecVotes || r.VoteAverage < f.MinRating {
+		return false
+	}
+	if kind == pick.Show {
+		excluded := strings.Split(showGenresExcluded, ",")
+		for _, g := range r.GenreIDs {
+			if slices.Contains(excluded, strconv.Itoa(g)) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // query builds the discover parameters (minus page and auth) for a kind,
@@ -184,10 +265,6 @@ type video struct {
 // there is none or the lookup fails, since a missing trailer shouldn't sink
 // the whole pick.
 func (c *Client) trailer(ctx context.Context, kind pick.Kind, r result) string {
-	segment := "movie"
-	if kind == pick.Show {
-		segment = "tv"
-	}
 	// Without include_video_language TMDB only returns en-US videos, which
 	// leaves most non-English titles without a trailer.
 	langs := "en,null"
@@ -200,7 +277,7 @@ func (c *Client) trailer(ctx context.Context, kind pick.Kind, r result) string {
 	var out struct {
 		Results []video `json:"results"`
 	}
-	if err := c.get(ctx, fmt.Sprintf("/%s/%d/videos", segment, r.ID), q, &out); err != nil {
+	if err := c.get(ctx, fmt.Sprintf("/%s/%d/videos", segment(kind), r.ID), q, &out); err != nil {
 		slog.Warn("tmdb trailer lookup failed", "id", r.ID, "kind", kind, "err", err)
 		return ""
 	}
@@ -284,9 +361,9 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 }
 
 func toResult(kind pick.Kind, r result) pick.Result {
-	title, date, segment := r.Title, r.ReleaseDate, "movie"
+	title, date := r.Title, r.ReleaseDate
 	if kind == pick.Show {
-		title, date, segment = r.Name, r.FirstAirDate, "tv"
+		title, date = r.Name, r.FirstAirDate
 	}
 
 	var fields []pick.Field
@@ -301,7 +378,7 @@ func toResult(kind pick.Kind, r result) pick.Result {
 		ID:          itemID(kind, r.ID),
 		Kind:        kind,
 		Title:       title,
-		URL:         fmt.Sprintf("%s/%s/%d", siteBase, segment, r.ID),
+		URL:         fmt.Sprintf("%s/%s/%d", siteBase, segment(kind), r.ID),
 		Description: pick.CleanText(r.Overview, 400),
 		Fields:      fields,
 		Source:      "TMDB",

@@ -17,6 +17,7 @@ const (
 	rerollPrefix = "reroll"
 	seenPrefix   = "seen:"
 	savePrefix   = "save:"
+	morePrefix   = "more:"
 	unseenPrefix = "unseen:"   // unseen:<w|->:<id>; w = restore to watchlist
 	wlRemoveID   = "wlremove:" // wlremove:<kind filter>
 )
@@ -32,6 +33,8 @@ func (b *Bot) onComponent(i *discordgo.InteractionCreate) {
 		b.handleSeen(i, strings.TrimPrefix(id, seenPrefix))
 	case strings.HasPrefix(id, savePrefix):
 		b.handleSave(i, strings.TrimPrefix(id, savePrefix))
+	case strings.HasPrefix(id, morePrefix):
+		b.handleMore(i, strings.TrimPrefix(id, morePrefix))
 	case strings.HasPrefix(id, unseenPrefix):
 		b.handleUnseen(i, strings.TrimPrefix(id, unseenPrefix))
 	case strings.HasPrefix(id, wlRemoveID):
@@ -74,6 +77,12 @@ func buttonRow(req request, res *pick.Result, saved bool) discordgo.ActionsRow {
 			Emoji:    &discordgo.ComponentEmoji{Name: "⭐"},
 		})
 	}
+	buttons = append(buttons, discordgo.Button{
+		Label:    "More like this",
+		Style:    discordgo.SecondaryButton,
+		CustomID: morePrefix + res.ID,
+		Emoji:    &discordgo.ComponentEmoji{Name: "✨"},
+	})
 	// Link buttons open the URL directly and send no interaction.
 	if res.TrailerURL != "" {
 		buttons = append(buttons, discordgo.Button{
