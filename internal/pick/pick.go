@@ -52,6 +52,7 @@ type Result struct {
 	Color       int // 0 means use the default color for the kind
 	Fields      []Field
 	Source      string // e.g. "AniList"
+	TrailerURL  string // empty when no trailer is known
 }
 
 // Source picks a random title matching a mood and filters.

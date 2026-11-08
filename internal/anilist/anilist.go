@@ -10,6 +10,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -48,6 +49,7 @@ const query = `query ($page: Int, $perPage: Int, $genres: [String], $minScore: I
       format
       seasonYear
       genres
+      trailer { id site }
     }
   }
 }`
@@ -79,6 +81,26 @@ type media struct {
 	Format       string   `json:"format"`
 	SeasonYear   int      `json:"seasonYear"`
 	Genres       []string `json:"genres"`
+	Trailer      *struct {
+		ID   string `json:"id"`
+		Site string `json:"site"`
+	} `json:"trailer"`
+}
+
+// trailerURL builds a watch link from AniList's trailer field, which only
+// ever names YouTube or Dailymotion.
+func (m media) trailerURL() string {
+	if m.Trailer == nil || m.Trailer.ID == "" {
+		return ""
+	}
+	id := url.QueryEscape(m.Trailer.ID)
+	switch strings.ToLower(m.Trailer.Site) {
+	case "youtube":
+		return "https://www.youtube.com/watch?v=" + id
+	case "dailymotion":
+		return "https://www.dailymotion.com/video/" + id
+	}
+	return ""
 }
 
 type page struct {
@@ -230,6 +252,7 @@ func toResult(m media) pick.Result {
 		Color:       color,
 		Fields:      fields,
 		Source:      "AniList",
+		TrailerURL:  m.trailerURL(),
 	}
 }
 

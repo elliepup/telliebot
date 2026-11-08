@@ -191,7 +191,7 @@ func (b *Bot) respond(i *discordgo.InteractionCreate, ack discordgo.InteractionR
 	defer cancel()
 
 	res, err := b.pick(ctx, req.Kind, m, f)
-	components := []discordgo.MessageComponent{rerollRow(req)}
+	components := []discordgo.MessageComponent{buttonRow(req, res.TrailerURL)}
 
 	edit := &discordgo.WebhookEdit{Components: &components}
 	if err != nil {
@@ -228,15 +228,26 @@ func (b *Bot) pick(ctx context.Context, kind string, m mood.Mood, f pick.Filters
 	return src.Pick(ctx, m, f)
 }
 
-func rerollRow(req request) discordgo.ActionsRow {
-	return discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+// buttonRow is the Reroll button, plus a Trailer link button when there is a
+// trailer. Link buttons open the URL directly and send no interaction.
+func buttonRow(req request, trailerURL string) discordgo.ActionsRow {
+	buttons := []discordgo.MessageComponent{
 		discordgo.Button{
 			Label:    "Reroll",
 			Style:    discordgo.PrimaryButton,
 			CustomID: req.customID(),
 			Emoji:    &discordgo.ComponentEmoji{Name: "🔄"},
 		},
-	}}
+	}
+	if trailerURL != "" {
+		buttons = append(buttons, discordgo.Button{
+			Label: "Trailer",
+			Style: discordgo.LinkButton,
+			URL:   trailerURL,
+			Emoji: &discordgo.ComponentEmoji{Name: "▶️"},
+		})
+	}
+	return discordgo.ActionsRow{Components: buttons}
 }
 
 func toEmbed(r pick.Result, m mood.Mood, req request) *discordgo.MessageEmbed {

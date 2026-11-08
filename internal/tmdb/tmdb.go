@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
@@ -60,6 +61,8 @@ type result struct {
 	VoteAverage  float64 `json:"vote_average"`
 	ReleaseDate  string  `json:"release_date"`   // movies
 	FirstAirDate string  `json:"first_air_date"` // shows
+
+	OriginalLanguage string `json:"original_language"`
 }
 
 type discoverResponse struct {
@@ -92,7 +95,10 @@ func (c *Client) pick(ctx context.Context, kind pick.Kind, m mood.Mood, f pick.F
 	if len(items) == 0 {
 		return pick.Result{}, pick.ErrNoResults
 	}
-	return toResult(kind, items[rand.IntN(len(items))]), nil
+	chosen := items[rand.IntN(len(items))]
+	res := toResult(kind, chosen)
+	res.TrailerURL = c.trailer(ctx, kind, chosen)
+	return res, nil
 }
 
 // query builds the discover parameters (minus page and auth) for a kind,
@@ -138,6 +144,89 @@ func (c *Client) discover(ctx context.Context, path string, base url.Values, pag
 	}
 	q.Set("page", strconv.Itoa(page))
 
+	var out discoverResponse
+	err := c.get(ctx, path, q, &out)
+	return out, err
+}
+
+type video struct {
+	Key      string `json:"key"`
+	Site     string `json:"site"`
+	Type     string `json:"type"`
+	Official bool   `json:"official"`
+	Language string `json:"iso_639_1"`
+}
+
+// trailer looks up the best YouTube trailer for a title. It returns "" when
+// there is none or the lookup fails, since a missing trailer shouldn't sink
+// the whole pick.
+func (c *Client) trailer(ctx context.Context, kind pick.Kind, r result) string {
+	segment := "movie"
+	if kind == pick.Show {
+		segment = "tv"
+	}
+	// Without include_video_language TMDB only returns en-US videos, which
+	// leaves most non-English titles without a trailer.
+	langs := "en,null"
+	if r.OriginalLanguage != "" && r.OriginalLanguage != "en" {
+		langs = "en," + r.OriginalLanguage + ",null"
+	}
+	q := url.Values{}
+	q.Set("include_video_language", langs)
+
+	var out struct {
+		Results []video `json:"results"`
+	}
+	if err := c.get(ctx, fmt.Sprintf("/%s/%d/videos", segment, r.ID), q, &out); err != nil {
+		slog.Warn("tmdb trailer lookup failed", "id", r.ID, "kind", kind, "err", err)
+		return ""
+	}
+	if v, ok := bestVideo(out.Results); ok {
+		return "https://www.youtube.com/watch?v=" + url.QueryEscape(v.Key)
+	}
+	return ""
+}
+
+// bestVideo prefers official trailers, then any trailer, then teasers, and
+// English over other languages within each tier. Only YouTube videos count,
+// because the URL format is built for YouTube.
+func bestVideo(vs []video) (video, bool) {
+	score := func(v video) int {
+		s := 0
+		switch v.Type {
+		case "Trailer":
+			s += 100
+		case "Teaser":
+			s += 50
+		default:
+			return -1
+		}
+		if v.Official {
+			s += 10
+		}
+		if v.Language == "en" {
+			s += 1
+		}
+		return s
+	}
+
+	best, bestScore := video{}, -1
+	for _, v := range vs {
+		if v.Site != "YouTube" || v.Key == "" {
+			continue
+		}
+		if s := score(v); s > bestScore {
+			best, bestScore = v, s
+		}
+	}
+	return best, bestScore >= 0
+}
+
+// get performs an authenticated GET and decodes the JSON response into out.
+func (c *Client) get(ctx context.Context, path string, q url.Values, out any) error {
+	if q == nil {
+		q = url.Values{}
+	}
 	bearer := strings.HasPrefix(c.key, "eyJ")
 	if !bearer {
 		q.Set("api_key", c.key)
@@ -145,7 +234,7 @@ func (c *Client) discover(ctx context.Context, path string, base url.Values, pag
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+path+"?"+q.Encode(), nil)
 	if err != nil {
-		return discoverResponse{}, err
+		return err
 	}
 	req.Header.Set("Accept", "application/json")
 	if bearer {
@@ -158,18 +247,17 @@ func (c *Client) discover(ctx context.Context, path string, base url.Values, pag
 		if ue, ok := err.(*url.Error); ok {
 			err = ue.Err
 		}
-		return discoverResponse{}, fmt.Errorf("tmdb request: %w", err)
+		return fmt.Errorf("tmdb request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return discoverResponse{}, fmt.Errorf("tmdb: unexpected status %d", resp.StatusCode)
+		return fmt.Errorf("tmdb: unexpected status %d", resp.StatusCode)
 	}
-	var out discoverResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return discoverResponse{}, fmt.Errorf("tmdb decode: %w", err)
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("tmdb decode: %w", err)
 	}
-	return out, nil
+	return nil
 }
 
 func toResult(kind pick.Kind, r result) pick.Result {
