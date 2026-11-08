@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -31,10 +30,12 @@ const (
 // The *_greater / *_lesser arguments are exclusive.
 const query = `query ($page: Int, $perPage: Int, $genres: [String], $minScore: Int,
                       $epGreater: Int, $epLesser: Int,
-                      $startGreater: FuzzyDateInt, $startLesser: FuzzyDateInt) {
+                      $startGreater: FuzzyDateInt, $startLesser: FuzzyDateInt,
+                      $idNotIn: [Int]) {
   Page(page: $page, perPage: $perPage) {
     pageInfo { lastPage }
     media(type: ANIME, isAdult: false, genre_in: $genres, format_in: [TV, MOVIE, ONA],
+          id_not_in: $idNotIn,
           averageScore_greater: $minScore,
           episodes_greater: $epGreater, episodes_lesser: $epLesser,
           startDate_greater: $startGreater, startDate_lesser: $startLesser,
@@ -128,22 +129,41 @@ func (c *Client) Pick(ctx context.Context, m mood.Mood, f pick.Filters) (pick.Re
 		return pick.Result{}, err
 	}
 
-	items := first.Media
-	if last := min(first.PageInfo.LastPage, maxPage); last > 1 {
-		if p := rand.IntN(last) + 1; p != 1 {
-			pg, err := c.fetch(ctx, p, vars)
-			if err != nil {
-				return pick.Result{}, err
-			}
-			if len(pg.Media) > 0 {
-				items = pg.Media
+	fetch := func(ctx context.Context, p int) ([]media, error) {
+		pg, err := c.fetch(ctx, p, vars)
+		return pg.Media, err
+	}
+	// Seen titles are already excluded server-side via id_not_in; checking
+	// again locally guards against the list being truncated.
+	keep := func(m media) bool { return !f.Exclude[itemID(m.ID)] }
+
+	chosen, err := pick.RandomFromPages(ctx, min(first.PageInfo.LastPage, maxPage), first.Media, fetch, keep)
+	if err != nil {
+		return pick.Result{}, err
+	}
+	return toResult(chosen), nil
+}
+
+func itemID(id int) string { return "anilist:" + strconv.Itoa(id) }
+
+// maxExcluded caps how many seen IDs go into id_not_in, to keep the
+// request small. Anything beyond it is still filtered locally.
+const maxExcluded = 500
+
+// excludedIDs extracts AniList IDs from a set of result IDs.
+func excludedIDs(exclude map[string]bool) []int {
+	var ids []int
+	for k := range exclude {
+		if n, ok := strings.CutPrefix(k, "anilist:"); ok {
+			if id, err := strconv.Atoi(n); err == nil {
+				ids = append(ids, id)
 			}
 		}
+		if len(ids) == maxExcluded {
+			break
+		}
 	}
-	if len(items) == 0 {
-		return pick.Result{}, pick.ErrNoResults
-	}
-	return toResult(items[rand.IntN(len(items))]), nil
+	return ids
 }
 
 // variables converts a mood and filters into AniList query variables.
@@ -156,6 +176,9 @@ func variables(m mood.Mood, f pick.Filters) map[string]any {
 	}
 	if len(m.AnimeGenres) > 0 {
 		vars["genres"] = m.AnimeGenres
+	}
+	if ids := excludedIDs(f.Exclude); len(ids) > 0 {
+		vars["idNotIn"] = ids
 	}
 	if f.AnimeEpisodes.Min > 0 {
 		vars["epGreater"] = f.AnimeEpisodes.Min - 1
@@ -244,6 +267,7 @@ func toResult(m media) pick.Result {
 	}
 
 	return pick.Result{
+		ID:          itemID(m.ID),
 		Kind:        pick.Anime,
 		Title:       title,
 		URL:         m.SiteURL,

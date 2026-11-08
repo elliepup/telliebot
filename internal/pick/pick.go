@@ -38,21 +38,25 @@ var ErrNoResults = errors.New("no titles matched")
 
 // Field is a short labeled fact shown on the result.
 type Field struct {
-	Name  string
-	Value string
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
-// Result is a single randomly picked title.
+// Result is a single randomly picked title. It is stored as JSON for the
+// watchlist, so keep field tags stable.
 type Result struct {
-	Kind        Kind
-	Title       string
-	URL         string
-	Description string
-	ImageURL    string
-	Color       int // 0 means use the default color for the kind
-	Fields      []Field
-	Source      string // e.g. "AniList"
-	TrailerURL  string // empty when no trailer is known
+	// ID uniquely identifies the title across sources, e.g. "anilist:21",
+	// "tmdb:movie:603", or "tmdb:tv:1399". It must not be empty.
+	ID          string  `json:"id"`
+	Kind        Kind    `json:"kind"`
+	Title       string  `json:"title"`
+	URL         string  `json:"url"`
+	Description string  `json:"description"`
+	ImageURL    string  `json:"image_url"`
+	Color       int     `json:"color"` // 0 means use the default color for the kind
+	Fields      []Field `json:"fields"`
+	Source      string  `json:"source"`      // e.g. "AniList"
+	TrailerURL  string  `json:"trailer_url"` // empty when no trailer is known
 }
 
 // Source picks a random title matching a mood and filters.

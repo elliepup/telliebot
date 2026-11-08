@@ -4,3 +4,8 @@ services:
     image: telliebot:latest
     env_file: .env
     restart: unless-stopped
+    volumes:
+      - telliebot-data:/data # seen list and watchlist (SQLite)
+
+volumes:
+  telliebot-data:

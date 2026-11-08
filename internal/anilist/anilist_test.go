@@ -29,9 +29,22 @@ func TestVariablesConvertsInclusiveToExclusive(t *testing.T) {
 	}
 }
 
+func TestVariablesExcludesSeenAniListIDsOnly(t *testing.T) {
+	f := pick.ParseFilters("", "", "")
+	f.Exclude = map[string]bool{"anilist:21": true, "anilist:1535": true, "tmdb:movie:603": true, "anilist:bad": true}
+	ids, ok := variables(mood.Surprise, f)["idNotIn"].([]int)
+	if !ok || len(ids) != 2 {
+		t.Fatalf("idNotIn: got %v", ids)
+	}
+	got := map[int]bool{ids[0]: true, ids[1]: true}
+	if !got[21] || !got[1535] {
+		t.Fatalf("idNotIn: got %v, want 21 and 1535", ids)
+	}
+}
+
 func TestVariablesOmitsUnsetFilters(t *testing.T) {
 	v := variables(mood.Surprise, pick.ParseFilters("", "", ""))
-	for _, k := range []string{"genres", "epGreater", "epLesser", "startGreater", "startLesser"} {
+	for _, k := range []string{"genres", "epGreater", "epLesser", "startGreater", "startLesser", "idNotIn"} {
 		if _, ok := v[k]; ok {
 			t.Errorf("%s should be unset, got %v", k, v[k])
 		}
