@@ -1,0 +1,6 @@
+services:
+  telliebot:
+    build: .
+    image: telliebot:latest
+    env_file: .env
+    restart: unless-stopped
