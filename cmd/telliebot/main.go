@@ -12,6 +12,7 @@ import (
 	"github.com/elliepup/telliebot/internal/bot"
 	"github.com/elliepup/telliebot/internal/config"
 	"github.com/elliepup/telliebot/internal/pick"
+	"github.com/elliepup/telliebot/internal/tmdb"
 )
 
 func main() {
@@ -23,6 +24,13 @@ func main() {
 
 	sources := map[pick.Kind]pick.Source{
 		pick.Anime: anilist.New(),
+	}
+	if cfg.TMDBAPIKey != "" {
+		t := tmdb.New(cfg.TMDBAPIKey)
+		sources[pick.Movie] = t.Movies()
+		sources[pick.Show] = t.Shows()
+	} else {
+		slog.Info("TMDB_API_KEY not set; movies and shows are disabled")
 	}
 
 	b, err := bot.New(cfg.BotToken, cfg.GuildID, sources)
