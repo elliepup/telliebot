@@ -39,6 +39,7 @@ Every pick has these buttons:
 | 🔄 Reroll   | Pick again with the same settings                                            |
 | 👁️ Seen it  | Never suggest this title again in this server, then pick a new one. The person who clicked gets a private **Undo** |
 | ⭐ Save     | Add it to the server's shared watchlist                                      |
+| ✨ More like this | Swap in a random recommendation for this title. Keeps your `min_rating` and skips seen titles, but ignores mood, length, and era. 🔄 Reroll goes back to your original settings |
 | ▶️ Trailer  | Open the trailer (when one is known)                                         |
 
 ### Voting
