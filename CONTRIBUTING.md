@@ -5,6 +5,24 @@
 Never commit directly to `main`. Do all work on a branch named `<type>/<short-description>`
 (for example `feat/reroll-button` or `fix/anilist-timeout`) and merge it through a pull request.
 
+## Checks
+
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every pull request and push
+to `main`. Run the same checks locally before pushing:
+
+```sh
+gofmt -l .               # must print nothing
+go mod tidy -diff        # must print nothing
+go vet ./...
+go test -race ./...
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+docker build .
+```
+
+`govulncheck` also runs weekly on its own, to catch new advisories against unchanged code.
+Dependabot opens weekly PRs for Go modules and the Docker base images, and monthly ones for
+GitHub Actions.
+
 ## Commit Message Guidelines
 
 Every commit tells a story. A good commit message explains why a change was made, makes
