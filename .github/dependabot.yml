@@ -1,0 +1,35 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+      include: scope # build(deps): bump ...
+    groups:
+      # One PR per week for routine updates instead of one per module.
+      go-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      # modernc.org/sqlite needs the exact libc version it was released
+      # with. These move when sqlite is bumped, never on their own.
+      - dependency-name: modernc.org/libc
+      - dependency-name: modernc.org/memory
+      - dependency-name: modernc.org/mathutil
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+      include: scope
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ci
+      include: scope # ci(deps): bump ...
