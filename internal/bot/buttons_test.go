@@ -41,14 +41,14 @@ func TestButtonRowFull(t *testing.T) {
 	for _, b := range bs {
 		labels = append(labels, b.Label)
 	}
-	if got := strings.Join(labels, ","); got != "Reroll,Seen it,Save,Trailer" {
+	if got := strings.Join(labels, ","); got != "Reroll,Seen it,Save,More like this,Trailer" {
 		t.Fatalf("buttons: got %s", got)
 	}
-	if bs[1].CustomID != "seen:tmdb:movie:603" || bs[2].CustomID != "save:tmdb:movie:603" {
-		t.Fatalf("custom IDs: %q %q", bs[1].CustomID, bs[2].CustomID)
+	if bs[1].CustomID != "seen:tmdb:movie:603" || bs[2].CustomID != "save:tmdb:movie:603" || bs[3].CustomID != "more:tmdb:movie:603" {
+		t.Fatalf("custom IDs: %q %q %q", bs[1].CustomID, bs[2].CustomID, bs[3].CustomID)
 	}
-	if bs[3].Style != discordgo.LinkButton || bs[3].URL == "" || bs[3].CustomID != "" {
-		t.Fatalf("trailer should be a link button: %+v", bs[3])
+	if bs[4].Style != discordgo.LinkButton || bs[4].URL == "" || bs[4].CustomID != "" {
+		t.Fatalf("trailer should be a link button: %+v", bs[4])
 	}
 	if len(bs) > 5 {
 		t.Fatalf("Discord allows at most 5 buttons per row, got %d", len(bs))
@@ -57,8 +57,8 @@ func TestButtonRowFull(t *testing.T) {
 
 func TestButtonRowSavedAndNoTrailer(t *testing.T) {
 	bs := buttonsOf(t, buttonRow(request{}, &pick.Result{ID: "anilist:1"}, true))
-	if len(bs) != 3 {
-		t.Fatalf("got %d buttons, want 3", len(bs))
+	if len(bs) != 4 {
+		t.Fatalf("got %d buttons, want 4 (no trailer)", len(bs))
 	}
 	if bs[2].Label != "Saved" || !bs[2].Disabled {
 		t.Fatalf("save button should show Saved and be disabled: %+v", bs[2])
