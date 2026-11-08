@@ -31,6 +31,32 @@ var defaultColors = map[pick.Kind]int{
 	pick.Show:  0x9b59b6,
 }
 
+// request is everything the user asked for in one /pick. It round-trips
+// through the reroll button's custom ID, so keys must not contain ':'.
+type request struct {
+	Mood, Kind, Rating, Length, Era string
+}
+
+func (r request) customID() string {
+	return strings.Join([]string{rerollPrefix, r.Mood, r.Kind, r.Rating, r.Length, r.Era}, ":")
+}
+
+// parseCustomID reads a reroll button ID. It also accepts the original
+// 3-part form (reroll:mood:kind) so buttons on older messages keep working.
+func parseCustomID(id string) (request, bool) {
+	p := strings.Split(id, ":")
+	if p[0] != rerollPrefix {
+		return request{}, false
+	}
+	switch len(p) {
+	case 3:
+		return request{Mood: p[1], Kind: p[2]}, true
+	case 6:
+		return request{Mood: p[1], Kind: p[2], Rating: p[3], Length: p[4], Era: p[5]}, true
+	}
+	return request{}, false
+}
+
 // Bot is a running Discord session.
 type Bot struct {
 	s       *discordgo.Session
@@ -77,6 +103,14 @@ func (b *Bot) Open() error {
 // Close disconnects from Discord.
 func (b *Bot) Close() error { return b.s.Close() }
 
+func toOptionChoices(cs []pick.Choice) []*discordgo.ApplicationCommandOptionChoice {
+	out := make([]*discordgo.ApplicationCommandOptionChoice, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, &discordgo.ApplicationCommandOptionChoice{Name: c.Label, Value: c.Key})
+	}
+	return out
+}
+
 func (b *Bot) commands() []*discordgo.ApplicationCommand {
 	moodChoices := make([]*discordgo.ApplicationCommandOptionChoice, 0, len(mood.All))
 	for _, m := range mood.All {
@@ -92,22 +126,16 @@ func (b *Bot) commands() []*discordgo.ApplicationCommand {
 		})
 	}
 
+	str := discordgo.ApplicationCommandOptionString
 	return []*discordgo.ApplicationCommand{{
 		Name:        "pick",
 		Description: "Pick something random to watch",
 		Options: []*discordgo.ApplicationCommandOption{
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "mood",
-				Description: "How are you feeling?",
-				Choices:     moodChoices,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "type",
-				Description: "What kind of thing to watch",
-				Choices:     typeChoices,
-			},
+			{Type: str, Name: "mood", Description: "How are you feeling?", Choices: moodChoices},
+			{Type: str, Name: "type", Description: "What kind of thing to watch", Choices: typeChoices},
+			{Type: str, Name: "min_rating", Description: fmt.Sprintf("Minimum rating out of 10 (default %.1f)", pick.DefaultMinRating), Choices: toOptionChoices(pick.RatingChoices)},
+			{Type: str, Name: "length", Description: "How much time you've got", Choices: toOptionChoices(pick.LengthChoices)},
+			{Type: str, Name: "era", Description: "When it came out", Choices: toOptionChoices(pick.EraChoices)},
 		},
 	}}
 }
@@ -119,52 +147,59 @@ func (b *Bot) onInteraction(_ *discordgo.Session, i *discordgo.InteractionCreate
 		if data.Name != "pick" {
 			return
 		}
-		moodKey, kind := mood.Surprise.Key, kindAny
+		req := request{Mood: mood.Surprise.Key, Kind: kindAny}
 		for _, o := range data.Options {
 			switch o.Name {
 			case "mood":
-				moodKey = o.StringValue()
+				req.Mood = o.StringValue()
 			case "type":
-				kind = o.StringValue()
+				req.Kind = o.StringValue()
+			case "min_rating":
+				req.Rating = o.StringValue()
+			case "length":
+				req.Length = o.StringValue()
+			case "era":
+				req.Era = o.StringValue()
 			}
 		}
-		b.respond(i, discordgo.InteractionResponseDeferredChannelMessageWithSource, moodKey, kind)
+		b.respond(i, discordgo.InteractionResponseDeferredChannelMessageWithSource, req)
 
 	case discordgo.InteractionMessageComponent:
-		parts := strings.Split(i.MessageComponentData().CustomID, ":")
-		if len(parts) != 3 || parts[0] != rerollPrefix {
+		req, ok := parseCustomID(i.MessageComponentData().CustomID)
+		if !ok {
 			return
 		}
-		b.respond(i, discordgo.InteractionResponseDeferredMessageUpdate, parts[1], parts[2])
+		b.respond(i, discordgo.InteractionResponseDeferredMessageUpdate, req)
 	}
 }
 
 // respond acknowledges the interaction right away (Discord allows 3s), then
 // fetches a pick and edits the response with it.
-func (b *Bot) respond(i *discordgo.InteractionCreate, ack discordgo.InteractionResponseType, moodKey, kind string) {
+func (b *Bot) respond(i *discordgo.InteractionCreate, ack discordgo.InteractionResponseType, req request) {
 	if err := b.s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: ack}); err != nil {
 		slog.Error("ack interaction", "err", err)
 		return
 	}
 
-	m, ok := mood.Get(moodKey)
+	m, ok := mood.Get(req.Mood)
 	if !ok {
 		m = mood.Surprise
 	}
+	f := pick.ParseFilters(req.Rating, req.Length, req.Era)
 
 	ctx, cancel := context.WithTimeout(context.Background(), pickTimeout)
 	defer cancel()
 
-	res, err := b.pick(ctx, kind, m)
-	components := []discordgo.MessageComponent{rerollRow(moodKey, kind)}
+	res, err := b.pick(ctx, req.Kind, m, f)
+	components := []discordgo.MessageComponent{rerollRow(req)}
 
 	edit := &discordgo.WebhookEdit{Components: &components}
 	if err != nil {
-		slog.Warn("pick failed", "mood", moodKey, "type", kind, "err", err)
+		slog.Warn("pick failed", "request", req, "err", err)
 		msg := "Couldn't reach the catalog right now. Try again in a sec."
 		switch {
 		case errors.Is(err, pick.ErrNoResults):
-			msg = "Nothing matched that mood. Try a different one?"
+			msg = "Nothing matched that. Try a different mood or loosen the filters?"
 		case errors.Is(err, errUnavailable):
 			msg = "That type isn't set up yet."
 		}
@@ -173,7 +208,7 @@ func (b *Bot) respond(i *discordgo.InteractionCreate, ack discordgo.InteractionR
 	} else {
 		empty := ""
 		edit.Content = &empty
-		edit.Embeds = &[]*discordgo.MessageEmbed{toEmbed(res, m)}
+		edit.Embeds = &[]*discordgo.MessageEmbed{toEmbed(res, m, req)}
 	}
 
 	if _, err := b.s.InteractionResponseEdit(i.Interaction, edit); err != nil {
@@ -181,7 +216,7 @@ func (b *Bot) respond(i *discordgo.InteractionCreate, ack discordgo.InteractionR
 	}
 }
 
-func (b *Bot) pick(ctx context.Context, kind string, m mood.Mood) (pick.Result, error) {
+func (b *Bot) pick(ctx context.Context, kind string, m mood.Mood, f pick.Filters) (pick.Result, error) {
 	k := pick.Kind(kind)
 	if kind == kindAny {
 		k = b.kinds[rand.IntN(len(b.kinds))]
@@ -190,21 +225,21 @@ func (b *Bot) pick(ctx context.Context, kind string, m mood.Mood) (pick.Result, 
 	if !ok {
 		return pick.Result{}, errUnavailable
 	}
-	return src.Pick(ctx, m)
+	return src.Pick(ctx, m, f)
 }
 
-func rerollRow(moodKey, kind string) discordgo.ActionsRow {
+func rerollRow(req request) discordgo.ActionsRow {
 	return discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 		discordgo.Button{
 			Label:    "Reroll",
 			Style:    discordgo.PrimaryButton,
-			CustomID: strings.Join([]string{rerollPrefix, moodKey, kind}, ":"),
+			CustomID: req.customID(),
 			Emoji:    &discordgo.ComponentEmoji{Name: "🔄"},
 		},
 	}}
 }
 
-func toEmbed(r pick.Result, m mood.Mood) *discordgo.MessageEmbed {
+func toEmbed(r pick.Result, m mood.Mood, req request) *discordgo.MessageEmbed {
 	color := r.Color
 	if color == 0 {
 		color = defaultColors[r.Kind]
@@ -215,15 +250,17 @@ func toEmbed(r pick.Result, m mood.Mood) *discordgo.MessageEmbed {
 		fields = append(fields, &discordgo.MessageEmbedField{Name: f.Name, Value: f.Value, Inline: true})
 	}
 
+	footer := []string{m.Emoji + " " + m.Label, r.Kind.Label()}
+	footer = append(footer, pick.Describe(req.Rating, req.Length, req.Era)...)
+	footer = append(footer, "via "+r.Source)
+
 	e := &discordgo.MessageEmbed{
 		Title:       r.Title,
 		URL:         r.URL,
 		Description: r.Description,
 		Color:       color,
 		Fields:      fields,
-		Footer: &discordgo.MessageEmbedFooter{
-			Text: fmt.Sprintf("%s %s · %s · via %s", m.Emoji, m.Label, r.Kind.Label(), r.Source),
-		},
+		Footer:      &discordgo.MessageEmbedFooter{Text: strings.Join(footer, " · ")},
 	}
 	if r.ImageURL != "" {
 		e.Image = &discordgo.MessageEmbedImage{URL: r.ImageURL}

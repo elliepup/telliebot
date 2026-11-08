@@ -54,9 +54,9 @@ type Result struct {
 	Source      string // e.g. "AniList"
 }
 
-// Source picks a random title matching a mood.
+// Source picks a random title matching a mood and filters.
 type Source interface {
-	Pick(ctx context.Context, m mood.Mood) (Result, error)
+	Pick(ctx context.Context, m mood.Mood, f Filters) (Result, error)
 }
 
 var (

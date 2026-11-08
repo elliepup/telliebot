@@ -6,11 +6,29 @@ you're feeling. Named after Ellie. 🐾
 ## Usage
 
 ```
-/pick mood:<mood> type:<type>
+/pick mood:<mood> type:<type> min_rating:<rating> length:<length> era:<era>
 ```
 
-Both options are optional. `mood` defaults to **Surprise me** and `type` defaults to
-**Anything**. Every pick has a 🔄 **Reroll** button that picks again with the same settings.
+Every option is optional. Every pick has a 🔄 **Reroll** button that picks again with the same
+settings.
+
+| Option       | Choices                                         | Default       |
+|--------------|-------------------------------------------------|---------------|
+| `mood`       | See below                                       | Surprise me   |
+| `type`       | Anything, Anime, Movie, Show                    | Anything      |
+| `min_rating` | 6+, 7+, 7.5+, 8+, 8.5+ (out of 10)              | 6.5+          |
+| `length`     | Short, Medium, Long                             | Any           |
+| `era`        | Classic (before 2000), 2000s, 2010s, Recent (last 3 years) | Any |
+
+`length` means something different for each type:
+
+| Length | Movies      | Anime      | Shows (per episode) |
+|--------|-------------|------------|---------------------|
+| Short  | ≤100 min    | ≤13 eps    | ≤30 min             |
+| Medium | 101–140 min | 14–26 eps  | 31–50 min           |
+| Long   | 141+ min    | 27+ eps    | 51+ min             |
+
+Shows filter by episode runtime because TMDB can't filter by number of seasons.
 
 Moods: Surprise me, Cozy, Funny, Hype, Emotional, Romantic, Spooky, Mind-bending, Epic
 adventure, Tense. The genre mapping for each lives in [`internal/mood/mood.go`](internal/mood/mood.go).
