@@ -12,6 +12,7 @@ import (
 	"github.com/elliepup/telliebot/internal/bot"
 	"github.com/elliepup/telliebot/internal/config"
 	"github.com/elliepup/telliebot/internal/pick"
+	"github.com/elliepup/telliebot/internal/storage"
 	"github.com/elliepup/telliebot/internal/tmdb"
 )
 
@@ -21,6 +22,13 @@ func main() {
 		slog.Error("load config", "err", err)
 		os.Exit(1)
 	}
+
+	store, err := storage.Open(cfg.DBPath)
+	if err != nil {
+		slog.Error("open database", "path", cfg.DBPath, "err", err)
+		os.Exit(1)
+	}
+	defer store.Close()
 
 	sources := map[pick.Kind]pick.Source{
 		pick.Anime: anilist.New(),
@@ -33,7 +41,7 @@ func main() {
 		slog.Info("TMDB_API_KEY not set; movies and shows are disabled")
 	}
 
-	b, err := bot.New(cfg.BotToken, cfg.GuildID, sources)
+	b, err := bot.New(cfg.BotToken, cfg.GuildID, sources, store)
 	if err != nil {
 		slog.Error("create bot", "err", err)
 		os.Exit(1)
@@ -46,7 +54,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	slog.Info("telliebot is running; press Ctrl+C to stop")
+	slog.Info("telliebot is running; press Ctrl+C to stop", "db", cfg.DBPath)
 	<-ctx.Done()
 	slog.Info("shutting down")
 }

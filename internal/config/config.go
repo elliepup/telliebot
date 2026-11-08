@@ -19,6 +19,8 @@ type Config struct {
 	// TMDBAPIKey enables movies and shows. Accepts either a v3 API key or a
 	// v4 read access token. Empty disables TMDB.
 	TMDBAPIKey string
+	// DBPath is where the SQLite database (seen list, watchlist) lives.
+	DBPath string
 }
 
 // Load reads configuration from the environment, falling back to a .env
@@ -30,6 +32,10 @@ func Load() (Config, error) {
 		BotToken:   strings.TrimPrefix(strings.TrimSpace(os.Getenv("BOT_TOKEN")), "Bot "),
 		GuildID:    strings.TrimSpace(os.Getenv("GUILD_ID")),
 		TMDBAPIKey: strings.TrimSpace(os.Getenv("TMDB_API_KEY")),
+		DBPath:     strings.TrimSpace(os.Getenv("DB_PATH")),
+	}
+	if c.DBPath == "" {
+		c.DBPath = "telliebot.db"
 	}
 	if c.BotToken == "" {
 		return c, errors.New("BOT_TOKEN is not set")
