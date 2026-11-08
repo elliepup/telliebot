@@ -1,8 +1,11 @@
 package bot
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/elliepup/telliebot/internal/pick"
 )
@@ -46,5 +49,21 @@ func TestSimilarEmbedFooter(t *testing.T) {
 	}
 	if strings.Contains(got, "Cozy") || strings.Contains(got, "Short") {
 		t.Errorf("unused mood/length must not be claimed: %q", got)
+	}
+}
+
+func TestRateLimitMessage(t *testing.T) {
+	wrapped := fmt.Errorf("pick: %w", &pick.RateLimitError{Source: "AniList", RetryAfter: 57 * time.Second})
+	if got := errorMessage(wrapped, request{}); got != "⏳ AniList is rate-limiting us right now. Try again in ~57s." {
+		t.Errorf("got %q", got)
+	}
+	if got, _ := rateLimitMessage(&pick.RateLimitError{Source: "TMDB"}); !strings.HasSuffix(got, "Try again in a minute.") {
+		t.Errorf("no Retry-After: got %q", got)
+	}
+	if _, ok := rateLimitMessage(errors.New("boom")); ok {
+		t.Error("other errors are not rate limits")
+	}
+	if got := errorMessage(errors.New("boom"), request{}); got != catalogErrorMessage {
+		t.Errorf("generic error: got %q", got)
 	}
 }

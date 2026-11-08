@@ -6,7 +6,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"math/rand/v2"
 	"net/http"
@@ -49,7 +51,7 @@ const query = `query ($page: Int, $perPage: Int, $genres: [String], $minScore: I
                       $startGreater: FuzzyDateInt, $startLesser: FuzzyDateInt,
                       $idNotIn: [Int]) {
   Page(page: $page, perPage: $perPage) {
-    pageInfo { lastPage }
+    pageInfo { lastPage hasNextPage }
     media(type: ANIME, isAdult: false, genre_in: $genres, format_in: [TV, MOVIE, ONA],
           id_not_in: $idNotIn,
           averageScore_greater: $minScore,
@@ -80,12 +82,21 @@ var pickFormats = map[string]bool{"TV": true, "MOVIE": true, "ONA": true}
 
 // Client talks to AniList.
 type Client struct {
-	http *http.Client
+	http     *http.Client
+	endpoint string
+	// firstPages caches page 1 per query (minus the seen list). Every pick
+	// needs page 1 to learn lastPage, so this halves requests for rerolls
+	// and votes, which matters when AniList limits us to 30 requests/min.
+	firstPages *pick.Cache[cachedPage]
 }
 
 // New returns an AniList client.
 func New() *Client {
-	return &Client{http: &http.Client{Timeout: 10 * time.Second}}
+	return &Client{
+		http:       &http.Client{Timeout: 10 * time.Second},
+		endpoint:   endpoint,
+		firstPages: pick.NewCache[cachedPage](pick.DefaultCacheSize, pick.DefaultCacheTTL),
+	}
 }
 
 type media struct {
@@ -130,7 +141,8 @@ func (m media) trailerURL() string {
 
 type page struct {
 	PageInfo struct {
-		LastPage int `json:"lastPage"`
+		LastPage    int  `json:"lastPage"`
+		HasNextPage bool `json:"hasNextPage"`
 	} `json:"pageInfo"`
 	Media []media `json:"media"`
 }
@@ -149,8 +161,33 @@ type recsData struct {
 // Pick returns a random anime matching the mood and filters.
 func (c *Client) Pick(ctx context.Context, m mood.Mood, f pick.Filters) (pick.Result, error) {
 	vars := variables(m, f)
+	res, err := c.pickFrom(ctx, vars, f, true)
+	if errors.Is(err, pick.ErrNoResults) && vars["idNotIn"] != nil {
+		// The cached page 1 ignores the seen list but other pages apply it,
+		// so their numbering doesn't line up. When most matches are seen,
+		// the unseen ones can fall between the two (they shift up to page 1
+		// of the filtered results). Retry with the seen list applied to
+		// every page, uncached, before saying there's nothing left.
+		res, err = c.pickFrom(ctx, vars, f, false)
+	}
+	return res, err
+}
 
-	first, err := c.fetch(ctx, 1, vars)
+// pickFrom picks a random title from the pages of a query. With cached set,
+// page 1 comes from the cache when possible.
+func (c *Client) pickFrom(ctx context.Context, vars map[string]any, f pick.Filters, cached bool) (pick.Result, error) {
+	var (
+		first cachedPage
+		key   string
+		err   error
+	)
+	if cached {
+		first, key, err = c.firstPage(ctx, vars)
+	} else {
+		var pg page
+		pg, err = c.fetch(ctx, 1, vars)
+		first = newCachedPage(pg)
+	}
 	if err != nil {
 		return pick.Result{}, err
 	}
@@ -159,15 +196,62 @@ func (c *Client) Pick(ctx context.Context, m mood.Mood, f pick.Filters) (pick.Re
 		pg, err := c.fetch(ctx, p, vars)
 		return pg.Media, err
 	}
-	// Seen titles are already excluded server-side via id_not_in; checking
-	// again locally guards against the list being truncated.
+	// Other pages exclude seen titles server-side via id_not_in. The local
+	// check covers the cached page 1 and a seen list longer than maxExcluded.
 	keep := func(m media) bool { return !f.Exclude[itemID(m.ID)] }
 
-	chosen, err := pick.RandomFromPages(ctx, min(first.PageInfo.LastPage, maxPage), first.Media, fetch, keep)
+	chosen, bound, err := pick.RandomFromPagesBound(ctx, first.Bound, first.Media, fetch, keep)
+	if cached && bound < first.Bound {
+		// Remember the real end of the results so the next pick doesn't
+		// spend requests on the same empty pages.
+		first.Bound = bound
+		c.firstPages.Put(key, first)
+	}
 	if err != nil {
 		return pick.Result{}, err
 	}
 	return toResult(chosen), nil
+}
+
+// cachedPage is page 1 of a query plus the highest page worth drawing from.
+// AniList's lastPage on page 1 is an estimate that can be far too high
+// (200 for a query with 2 pages), so Bound starts there, capped at maxPage,
+// and shrinks as picks find empty pages.
+type cachedPage struct {
+	Media []media
+	Bound int
+}
+
+func newCachedPage(pg page) cachedPage {
+	bound := min(pg.PageInfo.LastPage, maxPage)
+	if !pg.PageInfo.HasNextPage {
+		bound = 1
+	}
+	return cachedPage{Media: pg.Media, Bound: max(bound, 1)}
+}
+
+// firstPage returns page 1 of a query from the cache, fetching it on a miss,
+// along with its cache key. It's fetched and keyed without idNotIn, so one
+// copy serves every seen list (each server's and DM's), and newly seen
+// titles are still filtered out locally.
+func (c *Client) firstPage(ctx context.Context, vars map[string]any) (cachedPage, string, error) {
+	base := maps.Clone(vars)
+	delete(base, "idNotIn")
+	k, err := json.Marshal(base) // map keys are sorted, so this is stable
+	if err != nil {
+		return cachedPage{}, "", err
+	}
+	key := string(k)
+	if cp, ok := c.firstPages.Get(key); ok {
+		return cp, key, nil
+	}
+	pg, err := c.fetch(ctx, 1, base)
+	if err != nil {
+		return cachedPage{}, "", err
+	}
+	cp := newCachedPage(pg)
+	c.firstPages.Put(key, cp)
+	return cp, key, nil
 }
 
 // Similar returns a random anime from the top community recommendations for
@@ -287,7 +371,7 @@ func (c *Client) post(ctx context.Context, q string, vars map[string]any, out an
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -301,7 +385,7 @@ func (c *Client) post(ctx context.Context, q string, vars map[string]any, out an
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return fmt.Errorf("anilist rate limited (retry after %ss)", resp.Header.Get("Retry-After"))
+		return pick.RateLimited("AniList", resp.Header)
 	}
 
 	var envelope struct {

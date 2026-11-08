@@ -79,3 +79,40 @@ func TestRandomFromPagesFetchError(t *testing.T) {
 		t.Fatalf("got %v, want boom", err)
 	}
 }
+
+func TestRandomFromPagesBoundLearnsFromEmptyPages(t *testing.T) {
+	// The source claims 20 pages but only has 2 (like AniList's page-1
+	// lastPage, which says 200 for a 35-title query).
+	ps := pages(2, 3)
+	fetched := map[int]int{}
+	fetch := func(_ context.Context, p int) ([]int, error) { fetched[p]++; return ps[p], nil }
+	all := func(int) bool { return true }
+
+	bound := 20
+	for k := 0; k < 30; k++ {
+		_, b, err := RandomFromPagesBound(context.Background(), bound, ps[1], fetch, all)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b < 2 {
+			t.Fatalf("bound %d dropped below the real last page", b)
+		}
+		bound = b // the caller remembers it, as the AniList cache does
+	}
+	if bound != 2 {
+		t.Errorf("bound should converge on the real last page: got %d", bound)
+	}
+	if fetched[2] == 0 {
+		t.Error("page 2 was never used")
+	}
+}
+
+func TestRandomFromPagesBoundKeepsTrustedBound(t *testing.T) {
+	ps := pages(4, 3)
+	fetch := func(_ context.Context, p int) ([]int, error) { return ps[p], nil }
+	for k := 0; k < 20; k++ {
+		if _, b, _ := RandomFromPagesBound(context.Background(), 4, ps[1], fetch, func(int) bool { return true }); b != 4 {
+			t.Fatalf("no empty pages, so the bound must stay 4, got %d", b)
+		}
+	}
+}

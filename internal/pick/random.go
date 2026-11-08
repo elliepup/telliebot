@@ -22,6 +22,21 @@ func RandomFromPages[T any](
 	fetch func(ctx context.Context, page int) ([]T, error),
 	keep func(T) bool,
 ) (T, error) {
+	v, _, err := RandomFromPagesBound(ctx, lastPage, first, fetch, keep)
+	return v, err
+}
+
+// RandomFromPagesBound is RandomFromPages for sources whose lastPage can't
+// be trusted. An empty page p means the results end before p, so later
+// attempts only draw from pages below it. It also returns that learned
+// bound (or lastPage, if nothing was learned) for the caller to remember.
+func RandomFromPagesBound[T any](
+	ctx context.Context,
+	lastPage int,
+	first []T,
+	fetch func(ctx context.Context, page int) ([]T, error),
+	keep func(T) bool,
+) (T, int, error) {
 	var zero T
 	usable := func(items []T) []T {
 		var out []T
@@ -39,16 +54,20 @@ func RandomFromPages[T any](
 		if p != 1 {
 			var err error
 			if items, err = fetch(ctx, p); err != nil {
-				return zero, err
+				return zero, lastPage, err
+			}
+			if len(items) == 0 {
+				lastPage = p - 1
+				continue
 			}
 		}
 		if ok := usable(items); len(ok) > 0 {
-			return ok[rand.IntN(len(ok))], nil
+			return ok[rand.IntN(len(ok))], lastPage, nil
 		}
 	}
 
 	if ok := usable(first); len(ok) > 0 {
-		return ok[rand.IntN(len(ok))], nil
+		return ok[rand.IntN(len(ok))], lastPage, nil
 	}
-	return zero, ErrNoResults
+	return zero, lastPage, ErrNoResults
 }

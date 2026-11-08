@@ -33,12 +33,22 @@ const (
 type Client struct {
 	key  string
 	http *http.Client
+	base string
+	// firstPages caches discover page 1 per query. TMDB's rate limit is
+	// high, so this is for speed: a reroll needs one request instead of two
+	// (plus the trailer lookup).
+	firstPages *pick.Cache[discoverResponse]
 }
 
 // New returns a TMDB client. key may be a v3 API key or a v4 read access
 // token (a JWT starting with "eyJ").
 func New(key string) *Client {
-	return &Client{key: key, http: &http.Client{Timeout: 10 * time.Second}}
+	return &Client{
+		key:        key,
+		http:       &http.Client{Timeout: 10 * time.Second},
+		base:       baseURL,
+		firstPages: pick.NewCache[discoverResponse](pick.DefaultCacheSize, pick.DefaultCacheTTL),
+	}
 }
 
 // Movies returns a source that picks movies.
@@ -122,7 +132,7 @@ func (c *Client) pick(ctx context.Context, kind pick.Kind, m mood.Mood, f pick.F
 		path = "/discover/tv"
 	}
 
-	first, err := c.discover(ctx, path, q, 1)
+	first, err := c.firstPage(ctx, path, q)
 	if err != nil {
 		return pick.Result{}, err
 	}
@@ -241,6 +251,22 @@ func query(kind pick.Kind, m mood.Mood, f pick.Filters) url.Values {
 	return q
 }
 
+// firstPage returns discover page 1 for a query from the cache, fetching it
+// on a miss. Seen titles are filtered locally, so the query and its cached
+// page don't depend on the seen list.
+func (c *Client) firstPage(ctx context.Context, path string, q url.Values) (discoverResponse, error) {
+	key := path + "?" + q.Encode() // Encode sorts keys, so this is stable
+	if pg, ok := c.firstPages.Get(key); ok {
+		return pg, nil
+	}
+	pg, err := c.discover(ctx, path, q, 1)
+	if err != nil {
+		return pg, err
+	}
+	c.firstPages.Put(key, pg)
+	return pg, nil
+}
+
 func (c *Client) discover(ctx context.Context, path string, base url.Values, page int) (discoverResponse, error) {
 	q := url.Values{}
 	for k, v := range base {
@@ -332,7 +358,7 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 		q.Set("api_key", c.key)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+path+"?"+q.Encode(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path+"?"+q.Encode(), nil)
 	if err != nil {
 		return err
 	}
@@ -351,6 +377,9 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return pick.RateLimited("TMDB", resp.Header)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("tmdb: unexpected status %d", resp.StatusCode)
 	}
